@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SignalPath | Chennai Live GPS & Signal Scanner</title>
+<!-- Leaflet CSS -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+:root{--ink:#18344a;--muted:#607789;--blue:#1a73e8;--teal:#137333;--amber:#b06000;--coral:#c5221f;--pink:#d81b60;--line:#dadce0;--bg:#f8f9fa}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,sans-serif}
+main{width:min(1120px,100%);margin:auto;padding:20px 16px}
+header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.eyebrow{color:var(--blue);font-weight:700;font-size:.75rem;letter-spacing:.1em;text-transform:uppercase}
+h1{font-size:1.6rem;margin:2px 0}
+header p{margin:0;color:var(--muted);font-size:.9rem}
+.badge{padding:6px 12px;border-radius:20px;background:#e8f0fe;color:#1967d2;font-size:.75rem;font-weight:700}
+.bar{background:#fff;border:1px solid var(--line);border-radius:8px;padding:12px 16px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;box-shadow:0 1px 3px rgba(0,0,0,0.08);flex-wrap:wrap;gap:10px}
+.place{font-weight:600;font-size:1rem}
+.status{font-size:.8rem;color:var(--muted)}
+.filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+button{background:#1a73e8;color:#fff;border:none;border-radius:6px;padding:8px 14px;font:inherit;font-weight:600;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,0.1)}
+button:hover{filter:brightness(.92)}
+.btn-strong{background:var(--teal)}
+.btn-usable{background:var(--amber)}
+.btn-weak{background:var(--coral)}
+.btn-all{background:#5f6368}
+#mapFrame{height:58vh;min-height:380px;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,0.08)}
+#map{width:100%;height:100%}
+.bottom{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px}
+.card{background:#fff;border:1px solid var(--line);border-radius:8px;padding:14px;box-shadow:0 1px 3px rgba(0,0,0,0.08)}
+h2{font-size:.95rem;margin:0 0 6px;color:#202124}
+.result{color:var(--teal);font-weight:700;font-size:1.05rem}
+.small{color:var(--muted);font-size:.85rem;margin:4px 0 0}
+@media(max-width:650px){.bottom{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <div>
+    <div class="eyebrow">Hackathon Prototype</div>
+    <h1>SignalPath · Chennai Combined</h1>
+    <p>Live GPS positioning & interactive radio signal analyzer</p>
+  </div>
+  <span class="badge">LIVE MAP</span>
+</header>
+
+<section class="bar">
+  <div>
+    <div class="place" id="placeName">Locating your position...</div>
+    <div class="status" id="status">Acquiring GPS / Click map to inspect any location</div>
+  </div>
+  <div class="filters">
+    <button class="btn-strong" onclick="filterSignals('Strong')">Strong</button>
+    <button class="btn-usable" onclick="filterSignals('Usable')">Usable</button>
+    <button class="btn-weak" onclick="filterSignals('Weak')">Weak</button>
+    <button class="btn-all" onclick="filterSignals('All')">Reset View</button>
+    <button id="refreshButton">Center on Me</button>
+  </div>
+</section>
+
+<div id="mapFrame">
+  <div id="map"></div>
+</div>
+
+<section class="bottom">
+  <div class="card">
+    <h2>Location & Signal Metrics</h2>
+    <div class="result" id="recommendation">Active GPS Tracking</div>
+    <p class="small" id="details">Your permanent blue location pin stays fixed. Click anywhere on the map to place a pink pin and scan local signal strength around that spot.</p>
+  </div>
+  <div class="card">
+    <h2>Prototype Guide</h2>
+    <p class="small">Combines automatic GPS device positioning with click-to-scan regional signal mapping across Chennai.</p>
+  </div>
+</section>
+</main>
+
+<!-- Leaflet JavaScript -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+"use strict";
+
+// 1. Initialize map centered on Chennai
+var map = L.map('map').setView([13.0827, 80.2707], 13);
+
+// 2. Verified Esri World Street Map Tiles (Clean view, zero errors, zero 403 blocks)
+L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom: 19,
+  attribution: 'Tiles &copy; Esri &mdash; Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, and others'
+}).addTo(map);
+
+let userMarker = null;
+let userCircle = null;
+let inspectMarker = null;
+let hasCentered = false;
+let userLat = 13.0827;
+let userLon = 80.2707;
+let activeScanLat = 13.0827;
+let activeScanLon = 80.2707;
+let signalMarkers = [];
+let samplePoints = [];
+
+function generateSignalPoints(lat, lon) {
+  samplePoints = [
+    {name: "Primary Sector Node", lat: lat + 0.0015, lon: lon + 0.0015, level: "Strong", dbm: -64, type: "5G NSA"},
+    {name: "Commercial Hub Tower", lat: lat - 0.0025, lon: lon + 0.001, level: "Strong", dbm: -68, type: "4G LTE"},
+    {name: "Transit Area Node", lat: lat + 0.001, lon: lon - 0.0025, level: "Usable", dbm: -84, type: "4G LTE"},
+    {name: "Residential Pocket", lat: lat - 0.002, lon: lon - 0.002, level: "Usable", dbm: -88, type: "4G"},
+    {name: "Dead Zone / Basement", lat: lat + 0.003, lon: lon + 0.003, level: "Weak", dbm: -106, type: "3G / Edge"},
+    {name: "Alleyway Pocket", lat: lat - 0.003, lon: lon - 0.003, level: "Weak", dbm: -102, type: "3G"}
+  ];
+}
+
+// Initialize user location (Permanent Blue Pin)
+function setUserLocation(lat, lon, label, accuracy = 50) {
+  userLat = lat;
+  userLon = lon;
+  activeScanLat = lat;
+  activeScanLon = lon;
+
+  document.getElementById("placeName").textContent = `My Location: Lat ${userLat.toFixed(4)}, Lon ${userLon.toFixed(4)}`;
+  document.getElementById("status").textContent = label;
+
+  generateSignalPoints(userLat, userLon);
+
+  if (userMarker) {
+    userMarker.setLatLng([userLat, userLon]);
+    userCircle.setLatLng([userLat, userLon]);
+    userCircle.setRadius(accuracy);
+  } else {
+    userMarker = L.marker([userLat, userLon]).addTo(map)
+      .bindPopup("<b>You are here</b><br>Permanent User Location")
+      .openPopup();
+    
+    userCircle = L.circle([userLat, userLon], { radius: accuracy, color: '#1a73e8', fillColor: '#1a73e8', fillOpacity: 0.15 }).addTo(map);
+  }
+
+  renderSignals('All');
+}
+
+// 3. Track real device GPS location automatically on load
+function trackLocation() {
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      function(position) {
+        setUserLocation(position.coords.latitude, position.coords.longitude, `GPS Accuracy: within ±${Math.round(position.coords.accuracy)}m`, position.coords.accuracy);
+        if (!hasCentered) {
+          map.setView([userLat, userLon], 15);
+          hasCentered = true;
+        }
+      },
+      function(error) {
+        setUserLocation(13.0827, 80.2707, "Default Chennai Center (GPS Unavailable)");
+        if (!hasCentered) {
+          map.setView([13.0827, 80.2707], 13);
+          hasCentered = true;
+        }
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+  } else {
+    setUserLocation(13.0827, 80.2707, "Geolocation unsupported.");
+  }
+}
+
+// 4. Clicking elsewhere places a separate Pink inspection pin and scans signal strength around that clicked spot
+map.on('click', function(e) {
+  activeScanLat = e.latlng.lat;
+  activeScanLon = e.latlng.lng;
+
+  document.getElementById("recommendation").textContent = "Custom Location Inspected";
+  document.getElementById("details").textContent = `Inspecting signal around clicked spot (Lat ${activeScanLat.toFixed(4)}, Lon ${activeScanLon.toFixed(4)}). Your blue location pin remains fixed.`;
+
+  // Generate signal nodes centered around the clicked point
+  generateSignalPoints(activeScanLat, activeScanLon);
+  renderSignals('All');
+
+  // Create or move pink inspection marker
+  if (inspectMarker) {
+    inspectMarker.setLatLng([activeScanLat, activeScanLon]);
+  } else {
+    let pinkIcon = L.divIcon({
+      className: 'inspect-pin',
+      html: `<div style="background:#d81b60;color:white;padding:4px 8px;border-radius:10px;font-weight:bold;font-size:11px;box-shadow:0 2px 5px rgba(0,0,0,0.3);white-space:nowrap;">Clicked Target</div>`,
+      iconSize: [110, 28]
+    });
+    inspectMarker = L.marker([activeScanLat, activeScanLon], {icon: pinkIcon}).addTo(map)
+      .bindPopup("<b>Inspected Location</b><br>Custom clicked point")
+      .openPopup();
+  }
+});
+
+function renderSignals(filterLevel) {
+  signalMarkers.forEach(m => map.removeLayer(m));
+  signalMarkers = [];
+
+  let filtered = samplePoints;
+  if (filterLevel !== 'All') {
+    filtered = samplePoints.filter(p => p.level === filterLevel);
+  }
+
+  filtered.forEach(p => {
+    let distMeters = Math.hypot(p.lat - activeScanLat, p.lon - activeScanLon) * 111000;
+    let colorHex = p.level === 'Strong' ? '#137333' : (p.level === 'Usable' ? '#b06000' : '#c5221f');
+    
+    let customIcon = L.divIcon({
+      className: 'custom-pin',
+      html: `<div style="background:${colorHex};color:white;padding:4px 8px;border-radius:10px;font-weight:bold;font-size:11px;box-shadow:0 2px 5px rgba(0,0,0,0.3);white-space:nowrap;">${p.level} (${p.dbm} dBm)</div>`,
+      iconSize: [110, 28]
+    });
+
+    let sm = L.marker([p.lat, p.lon], {icon: customIcon}).addTo(map)
+      .bindPopup(`<b>${p.name}</b><br>Quality: ${p.level}<br>Power: <b>${p.dbm} dBm</b><br>Tech: ${p.type}<br>Distance from clicked spot: ~${Math.round(distMeters)}m`);
+    
+    signalMarkers.push(sm);
+  });
+}
+
+// Filter buttons handler
+function filterSignals(level) {
+  renderSignals(level);
+  if (level !== 'All') {
+    document.getElementById("recommendation").textContent = `${level} Signal Zone`;
+    document.getElementById("details").textContent = `Filtered view showing ${level} towers around your active inspection point.`;
+  } else {
+    document.getElementById("recommendation").textContent = "Active Tracking / All Nodes";
+    document.getElementById("details").textContent = "Showing complete radio frequency profile around active position.";
+  }
+}
+
+// Center on Me button functionality
+document.getElementById("refreshButton").addEventListener("click", () => {
+  map.setView([userLat, userLon], 16);
+  activeScanLat = userLat;
+  activeScanLon = userLon;
+  generateSignalPoints(userLat, userLon);
+  renderSignals('All');
+  if (inspectMarker) {
+    map.removeLayer(inspectMarker);
+    inspectMarker = null;
+  }
+  document.getElementById("recommendation").textContent = "Centered on Your Location";
+  document.getElementById("details").textContent = "Reset signal scan back to your permanent blue location.";
+});
+
+trackLocation();
+</script>
+</body>
+</html>
